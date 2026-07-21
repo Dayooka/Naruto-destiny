@@ -4,6 +4,7 @@ local Workspace = game:GetService("Workspace")
 local VirtualUser = game:GetService("VirtualUser")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
 
@@ -32,9 +33,9 @@ local CONFIG = {
 	MinAbilityChakraRatio = 0.2,
 	HealthButtonCooldown = 2,
 	TeleportOffset = Vector3.new(0, 6, 0),
-	HealDuration = 5,                       -- ennyi ideig marad a spawnnál gyógyulni
-	MaxTeleportDistance = 1000,             -- ennél messzebb lévő NPC-hez sétál, hogy betöltődjön
-	HealDuringCombat = false                -- ha true, harc közben is elteleportál gyógyulni (kísérleti, a játék mechanikájától függ)
+	HealDuration = 5,
+	MaxTeleportDistance = 1000,
+	HealDuringCombat = false
 }
 
 local myTurn = false
@@ -72,16 +73,80 @@ local function scanNPCNames()
 	availableNPCs = names
 end
 
--- ======= UI SYSTEM =======
+-- ======= PREMIUM UI SYSTEM =======
 local uiElements = {}
 local isDragging = false
 local dragInput = nil
 local dragStart = nil
 local startPos = nil
+local uiVisible = true
+local mainFrame = nil
+local screenGui = nil
+
+-- Prémium Color Palette
+local COLORS = {
+	Primary = Color3.fromRGB(100, 200, 255),
+	Secondary = Color3.fromRGB(70, 150, 220),
+	Dark = Color3.fromRGB(15, 15, 25),
+	DarkAlt = Color3.fromRGB(25, 25, 35),
+	Success = Color3.fromRGB(80, 200, 100),
+	Danger = Color3.fromRGB(255, 80, 80),
+	Warning = Color3.fromRGB(255, 180, 60),
+	Text = Color3.fromRGB(200, 220, 255),
+	TextDim = Color3.fromRGB(150, 200, 255),
+	Accent = Color3.fromRGB(150, 100, 255),
+	Glow = Color3.fromRGB(100, 200, 255)
+}
+
+-- ======= ANIMATION UTILITIES =======
+local function smoothTween(object, duration, targetProps)
+	if TweenService then
+		local tweenInfo = TweenInfo.new(
+			duration,
+			Enum.EasingStyle.Quad,
+			Enum.EasingDirection.InOut
+		)
+		local tween = TweenService:Create(object, tweenInfo, targetProps)
+		tween:Play()
+		return tween
+	end
+end
+
+local function createLoadingAnimation(parent)
+	local loadingContainer = Instance.new("Frame")
+	loadingContainer.BackgroundTransparency = 1
+	loadingContainer.Size = UDim2.new(1, 0, 1, 0)
+	loadingContainer.Parent = parent
+
+	for i = 1, 4 do
+		local dot = Instance.new("TextLabel")
+		dot.BackgroundColor3 = COLORS.Primary
+		dot.Size = UDim2.new(0, 10, 0, 10)
+		dot.Position = UDim2.new(0.5, (i-2.5)*20, 0.5, -5)
+		dot.TextTransparency = 1
+		dot.Parent = loadingContainer
+
+		Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
+
+		task.spawn(function()
+			while dot and dot.Parent do
+				smoothTween(dot, 0.4, {BackgroundTransparency = 0.7})
+				task.wait(0.4)
+				if dot and dot.Parent then
+					smoothTween(dot, 0.4, {BackgroundTransparency = 0})
+					task.wait(0.4)
+				end
+			end
+		end)
+	end
+
+	return loadingContainer
+end
 
 updateStatus = function(text)
 	if uiElements.StatusLabel then
-		uiElements.StatusLabel.Text = "Status: " .. tostring(text)
+		uiElements.StatusLabel.Text = "⚡ " .. tostring(text)
+		smoothTween(uiElements.StatusLabel, 0.3, {TextTransparency = 0})
 	end
 end
 
@@ -123,255 +188,484 @@ local function createGUI()
 	local existing = targetParent:FindFirstChild("GlassFarmPro")
 	if existing then existing:Destroy() end
 
-	local screenGui = Instance.new("ScreenGui")
+	screenGui = Instance.new("ScreenGui")
 	screenGui.Name = "GlassFarmPro"
 	screenGui.ResetOnSpawn = false
-	screenGui.DisplayOrder = 999 
+	screenGui.DisplayOrder = 999
 	screenGui.Parent = targetParent
 
-	local frame = Instance.new("Frame")
-	frame.Size = UDim2.new(0, 300, 0, 480)
-	frame.Position = UDim2.new(0, 30, 0.5, -240)
-	frame.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
-	frame.BackgroundTransparency = 0.1
-	frame.BorderSizePixel = 0
-	frame.Parent = screenGui
+	-- ======= LOADING SCREEN =======
+	local loadingScreen = Instance.new("Frame")
+	loadingScreen.Size = UDim2.new(1, 0, 1, 0)
+	loadingScreen.BackgroundColor3 = COLORS.Dark
+	loadingScreen.BackgroundTransparency = 0.3
+	loadingScreen.BorderSizePixel = 0
+	loadingScreen.Parent = screenGui
+	loadingScreen.ZIndex = 10000
 
-	Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 16)
+	local loadingBox = Instance.new("Frame")
+	loadingBox.Size = UDim2.new(0, 300, 0, 150)
+	loadingBox.Position = UDim2.new(0.5, -150, 0.5, -75)
+	loadingBox.BackgroundColor3 = COLORS.DarkAlt
+	loadingBox.BorderSizePixel = 0
+	loadingBox.Parent = loadingScreen
+	loadingBox.ZIndex = 10001
 
-	local stroke = Instance.new("UIStroke", frame)
-	stroke.Color = Color3.fromRGB(100, 200, 255)
-	stroke.Transparency = 0.3
-	stroke.Thickness = 2
+	Instance.new("UICorner", loadingBox).CornerRadius = UDim.new(0, 16)
 
-	-- ======= TITLEBAR =======
+	local loadingStroke = Instance.new("UIStroke", loadingBox)
+	loadingStroke.Color = COLORS.Primary
+	loadingStroke.Thickness = 2
+	loadingStroke.Transparency = 0.3
+
+	local loadingText = Instance.new("TextLabel")
+	loadingText.Size = UDim2.new(1, 0, 0, 40)
+	loadingText.Position = UDim2.new(0, 0, 0, 10)
+	loadingText.BackgroundTransparency = 1
+	loadingText.Text = "INITIALIZING..."
+	loadingText.TextColor3 = COLORS.Primary
+	loadingText.Font = Enum.Font.GothamBlack
+	loadingText.TextSize = 16
+	loadingText.Parent = loadingBox
+	loadingText.ZIndex = 10002
+
+	createLoadingAnimation(loadingBox)
+
+	-- ======= MAIN FRAME =======
+	mainFrame = Instance.new("Frame")
+	mainFrame.Size = UDim2.new(0, 350, 0, 550)
+	mainFrame.Position = UDim2.new(0, 30, 0.5, -275)
+	mainFrame.BackgroundColor3 = COLORS.DarkAlt
+	mainFrame.BackgroundTransparency = 0.05
+	mainFrame.BorderSizePixel = 0
+	mainFrame.Parent = screenGui
+	mainFrame.ClipsDescendants = true
+
+	Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 20)
+
+	local stroke = Instance.new("UIStroke", mainFrame)
+	stroke.Color = COLORS.Primary
+	stroke.Transparency = 0.2
+	stroke.Thickness = 2.5
+
+	local gradient = Instance.new("UIGradient", mainFrame)
+	gradient.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, COLORS.Dark),
+		ColorSequenceKeypoint.new(1, COLORS.DarkAlt)
+	})
+	gradient.Rotation = 45
+
+	-- ======= TITLEBAR PREMIUM =======
 	local titleBar = Instance.new("Frame")
-	titleBar.Size = UDim2.new(1, 0, 0, 50)
-	titleBar.BackgroundColor3 = Color3.fromRGB(15, 15, 25)
+	titleBar.Size = UDim2.new(1, 0, 0, 65)
+	titleBar.BackgroundColor3 = COLORS.Dark
 	titleBar.BackgroundTransparency = 0
 	titleBar.BorderSizePixel = 0
-	titleBar.Parent = frame
-	Instance.new("UICorner", titleBar).CornerRadius = UDim.new(0, 16)
+	titleBar.Parent = mainFrame
+
+	local titleGradient = Instance.new("UIGradient", titleBar)
+	titleGradient.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, COLORS.Primary),
+		ColorSequenceKeypoint.new(1, COLORS.Secondary)
+	})
+	titleGradient.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.9),
+		NumberSequenceKeypoint.new(1, 0.95)
+	})
+
+	Instance.new("UICorner", titleBar).CornerRadius = UDim.new(0, 20)
+
+	local titleIcon = Instance.new("TextLabel")
+	titleIcon.Size = UDim2.new(0, 40, 0, 40)
+	titleIcon.Position = UDim2.new(0, 12, 0.5, -20)
+	titleIcon.BackgroundTransparency = 1
+	titleIcon.Text = "⚡"
+	titleIcon.TextSize = 28
+	titleIcon.Parent = titleBar
 
 	local title = Instance.new("TextLabel")
-	title.Size = UDim2.new(1, -80, 1, 0)
+	title.Size = UDim2.new(1, -120, 1, 0)
+	title.Position = UDim2.new(0, 55, 0, 0)
 	title.BackgroundTransparency = 1
 	title.Text = "AUTOFARM PRO"
-	title.TextColor3 = Color3.fromRGB(100, 200, 255)
+	title.TextColor3 = Color3.fromRGB(255, 255, 255)
 	title.Font = Enum.Font.GothamBlack
-	title.TextSize = 16
+	title.TextSize = 18
+	title.TextXAlignment = Enum.TextXAlignment.Left
+	title.TextYAlignment = Enum.TextYAlignment.Center
 	title.Parent = titleBar
 
-	-- Hide Button
-	local hideBtn = Instance.new("TextButton")
-	hideBtn.Size = UDim2.new(0, 30, 0, 30)
-	hideBtn.Position = UDim2.new(1, -70, 0.5, -15)
-	hideBtn.BackgroundColor3 = Color3.fromRGB(100, 150, 200)
-	hideBtn.BackgroundTransparency = 0.4
-	hideBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-	hideBtn.Font = Enum.Font.GothamBold
-	hideBtn.TextSize = 14
-	hideBtn.Text = "-"
-	hideBtn.Parent = titleBar
-	Instance.new("UICorner", hideBtn).CornerRadius = UDim.new(0, 6)
+	local subtitle = Instance.new("TextLabel")
+	subtitle.Size = UDim2.new(1, -120, 0, 20)
+	subtitle.Position = UDim2.new(0, 55, 0, 35)
+	subtitle.BackgroundTransparency = 1
+	subtitle.Text = "✦ Premium Edition"
+	subtitle.TextColor3 = COLORS.TextDim
+	subtitle.Font = Enum.Font.GothamMedium
+	subtitle.TextSize = 10
+	subtitle.TextXAlignment = Enum.TextXAlignment.Left
+	subtitle.Parent = titleBar
+
+	-- Minimize Button
+	local minimizeBtn = Instance.new("TextButton")
+	minimizeBtn.Size = UDim2.new(0, 35, 0, 35)
+	minimizeBtn.Position = UDim2.new(1, -80, 0.5, -17.5)
+	minimizeBtn.BackgroundColor3 = COLORS.Secondary
+	minimizeBtn.BackgroundTransparency = 0.5
+	minimizeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	minimizeBtn.Font = Enum.Font.GothamBold
+	minimizeBtn.TextSize = 16
+	minimizeBtn.Text = "−"
+	minimizeBtn.Parent = titleBar
+	minimizeBtn.ZIndex = 10
+
+	Instance.new("UICorner", minimizeBtn).CornerRadius = UDim.new(0, 10)
+
+	local minimizeStroke = Instance.new("UIStroke", minimizeBtn)
+	minimizeStroke.Color = COLORS.Primary
+	minimizeStroke.Transparency = 0.4
+	minimizeStroke.Thickness = 1.5
 
 	-- Close Button
 	local closeBtn = Instance.new("TextButton")
-	closeBtn.Size = UDim2.new(0, 30, 0, 30)
-	closeBtn.Position = UDim2.new(1, -35, 0.5, -15)
-	closeBtn.BackgroundColor3 = Color3.fromRGB(255, 80, 80)
-	closeBtn.BackgroundTransparency = 0.4
+	closeBtn.Size = UDim2.new(0, 35, 0, 35)
+	closeBtn.Position = UDim2.new(1, -40, 0.5, -17.5)
+	closeBtn.BackgroundColor3 = COLORS.Danger
+	closeBtn.BackgroundTransparency = 0.5
 	closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 	closeBtn.Font = Enum.Font.GothamBold
 	closeBtn.TextSize = 16
-	closeBtn.Text = "X"
+	closeBtn.Text = "✕"
 	closeBtn.Parent = titleBar
-	Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 6)
+	closeBtn.ZIndex = 10
+
+	Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 10)
+
+	local closeStroke = Instance.new("UIStroke", closeBtn)
+	closeStroke.Color = COLORS.Danger
+	closeStroke.Transparency = 0.4
+	closeStroke.Thickness = 1.5
 
 	local divider = Instance.new("Frame")
-	divider.Size = UDim2.new(0.9, 0, 0, 1)
-	divider.Position = UDim2.new(0.05, 0, 0, 50)
-	divider.BackgroundColor3 = Color3.fromRGB(100, 200, 255)
-	divider.BackgroundTransparency = 0.5
+	divider.Size = UDim2.new(0.95, 0, 0, 1.5)
+	divider.Position = UDim2.new(0.025, 0, 0, 65)
+	divider.BackgroundColor3 = COLORS.Primary
+	divider.BackgroundTransparency = 0.3
 	divider.BorderSizePixel = 0
-	divider.Parent = frame
+	divider.Parent = mainFrame
 
 	-- ======= SCROLLING CONTENT =======
 	local scrollFrame = Instance.new("ScrollingFrame")
-	scrollFrame.Size = UDim2.new(1, -20, 1, -180)
-	scrollFrame.Position = UDim2.new(0, 10, 0, 60)
+	scrollFrame.Size = UDim2.new(1, -20, 1, -210)
+	scrollFrame.Position = UDim2.new(0, 10, 0, 75)
 	scrollFrame.BackgroundTransparency = 1
 	scrollFrame.BorderSizePixel = 0
-	scrollFrame.ScrollBarThickness = 3
-	scrollFrame.ScrollBarImageColor3 = Color3.fromRGB(100, 200, 255)
-	scrollFrame.Parent = frame
+	scrollFrame.ScrollBarThickness = 4
+	scrollFrame.ScrollBarImageColor3 = COLORS.Primary
+	scrollFrame.ScrollBarImageTransparency = 0.3
+	scrollFrame.Parent = mainFrame
+	scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
 
 	local listLayout = Instance.new("UIListLayout")
 	listLayout.SortOrder = Enum.SortOrder.LayoutOrder
-	listLayout.Padding = UDim.new(0, 8)
+	listLayout.Padding = UDim.new(0, 10)
 	listLayout.Parent = scrollFrame
 
 	local padding = Instance.new("UIPadding", scrollFrame)
-	padding.PaddingLeft = UDim.new(0, 5)
-	padding.PaddingRight = UDim.new(0, 5)
+	padding.PaddingLeft = UDim.new(0, 8)
+	padding.PaddingRight = UDim.new(0, 8)
+	padding.PaddingTop = UDim.new(0, 8)
 
 	listLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-		scrollFrame.CanvasSize = UDim2.new(0, 0, 0, listLayout.AbsoluteContentSize.Y)
+		scrollFrame.CanvasSize = UDim2.new(0, 0, 0, listLayout.AbsoluteContentSize.Y + 16)
 	end)
 
-	local function createButton(text, callback)
+	-- ======= BUTTON FACTORY =======
+	local function createButton(text, callback, buttonColor)
+		buttonColor = buttonColor or COLORS.Secondary
+		
+		local btnContainer = Instance.new("Frame")
+		btnContainer.Size = UDim2.new(1, 0, 0, 40)
+		btnContainer.BackgroundTransparency = 1
+		btnContainer.Parent = scrollFrame
+
 		local btn = Instance.new("TextButton")
-		btn.Size = UDim2.new(1, -10, 0, 35)
-		btn.BackgroundColor3 = Color3.fromRGB(50, 50, 70)
+		btn.Size = UDim2.new(1, -10, 1, 0)
+		btn.BackgroundColor3 = buttonColor
 		btn.BackgroundTransparency = 0.4
-		btn.TextColor3 = Color3.fromRGB(200, 220, 255)
+		btn.TextColor3 = COLORS.Text
 		btn.Font = Enum.Font.GothamSemibold
-		btn.TextSize = 12
+		btn.TextSize = 13
 		btn.Text = text
-		btn.Parent = scrollFrame
-		Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+		btn.Parent = btnContainer
+		btn.ZIndex = 5
+
+		Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 12)
 
 		local btnStroke = Instance.new("UIStroke", btn)
-		btnStroke.Color = Color3.fromRGB(100, 200, 255)
-		btnStroke.Transparency = 0.6
-		btnStroke.Thickness = 1
+		btnStroke.Color = buttonColor
+		btnStroke.Transparency = 0.5
+		btnStroke.Thickness = 1.5
+
+		btn.MouseEnter:Connect(function()
+			smoothTween(btn, 0.2, {BackgroundTransparency = 0.2})
+			smoothTween(btnStroke, 0.2, {Transparency = 0.1})
+		end)
+
+		btn.MouseLeave:Connect(function()
+			smoothTween(btn, 0.2, {BackgroundTransparency = 0.4})
+			smoothTween(btnStroke, 0.2, {Transparency = 0.5})
+		end)
 
 		btn.MouseButton1Click:Connect(function()
+			smoothTween(btn, 0.1, {Size = UDim2.new(1, -8, 1, 0)})
+			task.wait(0.1)
+			smoothTween(btn, 0.15, {Size = UDim2.new(1, -10, 1, 0)})
+
 			local result = callback()
 			if typeof(result) == "string" and result ~= "" then
 				btn.Text = result
+				task.spawn(function()
+					task.wait(1.5)
+					btn.Text = text
+				end)
 			end
 		end)
-		return btn
+
+		return btn, btnContainer
 	end
 
+	-- ======= TOGGLE FACTORY =======
 	local function createToggle(text, configKey)
-		local btn = Instance.new("TextButton")
-		btn.Size = UDim2.new(1, -10, 0, 35)
-		btn.BackgroundColor3 = CONFIG[configKey] and Color3.fromRGB(80, 200, 100) or Color3.fromRGB(50, 50, 70)
-		btn.BackgroundTransparency = CONFIG[configKey] and 0.3 or 0.4
-		btn.TextColor3 = Color3.fromRGB(200, 220, 255)
-		btn.Font = Enum.Font.GothamSemibold
-		btn.TextSize = 12
-		btn.Text = text .. ": " .. (CONFIG[configKey] and "ON" or "OFF")
-		btn.Parent = scrollFrame
-		Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+		local toggleContainer = Instance.new("Frame")
+		toggleContainer.Size = UDim2.new(1, 0, 0, 40)
+		toggleContainer.BackgroundTransparency = 1
+		toggleContainer.Parent = scrollFrame
 
-		local btnStroke = Instance.new("UIStroke", btn)
-		btnStroke.Color = Color3.fromRGB(100, 200, 255)
-		btnStroke.Transparency = 0.6
-		btnStroke.Thickness = 1
+		local bg = Instance.new("Frame")
+		bg.Size = UDim2.new(1, -10, 1, 0)
+		bg.BackgroundColor3 = CONFIG[configKey] and COLORS.Success or COLORS.Secondary
+		bg.BackgroundTransparency = 0.5
+		bg.Parent = toggleContainer
+
+		Instance.new("UICorner", bg).CornerRadius = UDim.new(0, 12)
+
+		local bgStroke = Instance.new("UIStroke", bg)
+		bgStroke.Color = CONFIG[configKey] and COLORS.Success or COLORS.Secondary
+		bgStroke.Transparency = 0.3
+		bgStroke.Thickness = 1.5
+
+		local btn = Instance.new("TextButton")
+		btn.Size = UDim2.new(1, 0, 1, 0)
+		btn.BackgroundTransparency = 1
+		btn.TextColor3 = COLORS.Text
+		btn.Font = Enum.Font.GothamSemibold
+		btn.TextSize = 13
+		btn.Text = (CONFIG[configKey] and "✓ " or "○ ") .. text .. (CONFIG[configKey] and " [ON]" or " [OFF]")
+		btn.Parent = bg
+
+		btn.MouseEnter:Connect(function()
+			smoothTween(bg, 0.2, {BackgroundTransparency = 0.3})
+		end)
+
+		btn.MouseLeave:Connect(function()
+			smoothTween(bg, 0.2, {BackgroundTransparency = 0.5})
+		end)
 
 		btn.MouseButton1Click:Connect(function()
 			CONFIG[configKey] = not CONFIG[configKey]
-			TweenService:Create(btn, TweenInfo.new(0.25), {
-				BackgroundColor3 = CONFIG[configKey] and Color3.fromRGB(80, 200, 100) or Color3.fromRGB(50, 50, 70),
-				BackgroundTransparency = CONFIG[configKey] and 0.3 or 0.4
-			}):Play()
-			btn.Text = text .. ": " .. (CONFIG[configKey] and "ON" or "OFF")
+			
+			smoothTween(bg, 0.25, {
+				BackgroundColor3 = CONFIG[configKey] and COLORS.Success or COLORS.Secondary,
+			})
+			smoothTween(bgStroke, 0.25, {
+				Color = CONFIG[configKey] and COLORS.Success or COLORS.Secondary,
+			})
+			
+			btn.Text = (CONFIG[configKey] and "✓ " or "○ ") .. text .. (CONFIG[configKey] and " [ON]" or " [OFF]")
 		end)
-		return btn
+
+		return btn, toggleContainer
 	end
 
-	-- Target Selection Label
+	-- ======= STAT BAR =======
+	local function createStatBar(label, getValue, getMax, color)
+		local statContainer = Instance.new("Frame")
+		statContainer.Size = UDim2.new(1, 0, 0, 50)
+		statContainer.BackgroundTransparency = 1
+		statContainer.Parent = scrollFrame
+
+		local statLabel = Instance.new("TextLabel")
+		statLabel.Size = UDim2.new(1, -10, 0, 18)
+		statLabel.BackgroundTransparency = 1
+		statLabel.TextColor3 = COLORS.TextDim
+		statLabel.Font = Enum.Font.GothamMedium
+		statLabel.TextSize = 11
+		statLabel.Text = label .. ": --/-- "
+		statLabel.TextXAlignment = Enum.TextXAlignment.Left
+		statLabel.Parent = statContainer
+
+		local barBg = Instance.new("Frame")
+		barBg.Size = UDim2.new(1, -10, 0, 20)
+		barBg.Position = UDim2.new(0, 5, 0, 24)
+		barBg.BackgroundColor3 = COLORS.Dark
+		barBg.BackgroundTransparency = 0.3
+		barBg.Parent = statContainer
+
+		Instance.new("UICorner", barBg).CornerRadius = UDim.new(0, 8)
+
+		local barFill = Instance.new("Frame")
+		barFill.Size = UDim2.new(0.5, 0, 1, 0)
+		barFill.BackgroundColor3 = color
+		barFill.BackgroundTransparency = 0
+		barFill.BorderSizePixel = 0
+		barFill.Parent = barBg
+
+		Instance.new("UICorner", barFill).CornerRadius = UDim.new(0, 8)
+
+		task.spawn(function()
+			while statContainer and statContainer.Parent do
+				local current, max = getValue(), getMax()
+				local ratio = max > 0 and (current / max) or 0
+				ratio = math.max(0, math.min(1, ratio))
+
+				barFill.Size = UDim2.new(ratio, 0, 1, 0)
+				statLabel.Text = label .. ": " .. math.floor(current) .. "/" .. math.floor(max)
+
+				task.wait(0.2)
+			end
+		end)
+
+		return statContainer
+	end
+
+	-- ======= UI ELEMENTS =======
+
 	local targetLabel = Instance.new("TextLabel")
-	targetLabel.Size = UDim2.new(1, -10, 0, 25)
-	targetLabel.BackgroundTransparency = 1
-	targetLabel.TextColor3 = Color3.fromRGB(150, 200, 255)
+	targetLabel.Size = UDim2.new(1, -10, 0, 28)
+	targetLabel.BackgroundColor3 = COLORS.Primary
+	targetLabel.BackgroundTransparency = 0.8
+	targetLabel.TextColor3 = COLORS.Text
 	targetLabel.Font = Enum.Font.GothamMedium
 	targetLabel.TextSize = 11
 	targetLabel.Text = "Targets: None Selected"
 	targetLabel.TextXAlignment = Enum.TextXAlignment.Left
+	targetLabel.TextWrapped = true
 	targetLabel.Parent = scrollFrame
+	targetLabel.ZIndex = 5
+
+	Instance.new("UICorner", targetLabel).CornerRadius = UDim.new(0, 10)
+	local targetStroke = Instance.new("UIStroke", targetLabel)
+	targetStroke.Color = COLORS.Primary
+	targetStroke.Transparency = 0.3
+
 	uiElements.TargetLabel = targetLabel
 
-	-- Multi-Target Selection Button
-	createButton("Select Targets", function()
+	createButton("🎯 Select Targets", function()
 		scanNPCNames()
 		uiElements.ShowTargetMenu()
 		return "Select Targets"
-	end)
+	end, COLORS.Accent)
 
-	createButton("Movement: " .. CONFIG.MoveMode, function()
+	createButton("🚀 Movement: " .. CONFIG.MoveMode, function()
 		CONFIG.MoveMode = (CONFIG.MoveMode == "Walk") and "Teleport" or "Walk"
-		return "Movement: " .. CONFIG.MoveMode
+		return "🚀 Movement: " .. CONFIG.MoveMode
 	end)
 
-	createButton("Return Delay: " .. tostring(CONFIG.ReturnDelay) .. "s", function()
+	createStatBar("⚡ Chakra", function() return (getChakraData()) end, function() return (select(2, getChakraData())) end, COLORS.Primary)
+	createStatBar("❤ Health", function() return (player.Character and player.Character:FindFirstChildOfClass("Humanoid") and player.Character:FindFirstChildOfClass("Humanoid").Health or 0) end, function() return (player.Character and player.Character:FindFirstChildOfClass("Humanoid") and player.Character:FindFirstChildOfClass("Humanoid").MaxHealth or 100) end, COLORS.Danger)
+
+	createButton("⏱ Return Delay: " .. tostring(CONFIG.ReturnDelay) .. "s", function()
 		CONFIG.ReturnDelay += 1
 		if CONFIG.ReturnDelay > 10 then
 			CONFIG.ReturnDelay = 0
 		end
-		return "Return Delay: " .. tostring(CONFIG.ReturnDelay) .. "s"
+		return "⏱ Return Delay: " .. tostring(CONFIG.ReturnDelay) .. "s"
 	end)
 
 	createToggle("Health Refill", "HealthEnabled")
-
 	createToggle("Heal During Combat", "HealDuringCombat")
 
-	createButton("HP Threshold: " .. tostring(math.floor(CONFIG.AutoHealthThreshold * 100)) .. "%", function()
+	createButton("🏥 HP Threshold: " .. tostring(math.floor(CONFIG.AutoHealthThreshold * 100)) .. "%", function()
 		CONFIG.AutoHealthThreshold += 0.1
 		if CONFIG.AutoHealthThreshold > 0.9 then
 			CONFIG.AutoHealthThreshold = 0.1
 		end
-		return "HP Threshold: " .. tostring(math.floor(CONFIG.AutoHealthThreshold * 100)) .. "%"
+		return "🏥 HP Threshold: " .. tostring(math.floor(CONFIG.AutoHealthThreshold * 100)) .. "%"
 	end)
 
-	createButton("Chakra Threshold: " .. tostring(math.floor(CONFIG.AutoChakraThreshold * 100)) .. "%", function()
+	createButton("⚡ Chakra Threshold: " .. tostring(math.floor(CONFIG.AutoChakraThreshold * 100)) .. "%", function()
 		CONFIG.AutoChakraThreshold += 0.1
 		if CONFIG.AutoChakraThreshold > 0.9 then
 			CONFIG.AutoChakraThreshold = 0.1
 		end
-		return "Chakra Threshold: " .. tostring(math.floor(CONFIG.AutoChakraThreshold * 100)) .. "%"
+		return "⚡ Chakra Threshold: " .. tostring(math.floor(CONFIG.AutoChakraThreshold * 100)) .. "%"
 	end)
 
-	createButton("Use Health Now", function()
+	createButton("💊 Use Health Now", function()
 		local healthRefillFn = _G.GlassFarmProUseHealthRefill
 		if type(healthRefillFn) ~= "function" then
 			updateStatus("Health function unavailable")
-			return "Use Health Now"
+			return "💊 Use Health Now"
 		end
 
 		local ok, message = healthRefillFn()
 		if not ok then
 			updateStatus(message)
-			return "Use Health Now"
+			return "💊 Use Health Now"
 		end
 		return message
-	end)
+	end, COLORS.Success)
 
 	createToggle("Use Abilities", "AutoAbility")
 	createToggle("Anti AFK", "AntiAFK")
 
 	-- ======= BOTTOM PANEL =======
 	local bottomPanel = Instance.new("Frame")
-	bottomPanel.Size = UDim2.new(1, 0, 0, 120)
-	bottomPanel.Position = UDim2.new(0, 0, 1, -120)
-	bottomPanel.BackgroundTransparency = 1
-	bottomPanel.Parent = frame
+	bottomPanel.Size = UDim2.new(1, 0, 0, 140)
+	bottomPanel.Position = UDim2.new(0, 0, 1, -140)
+	bottomPanel.BackgroundColor3 = COLORS.Dark
+	bottomPanel.BackgroundTransparency = 0.2
+	bottomPanel.BorderSizePixel = 0
+	bottomPanel.Parent = mainFrame
+
+	local bottomGradient = Instance.new("UIGradient", bottomPanel)
+	bottomGradient.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, COLORS.Dark),
+		ColorSequenceKeypoint.new(1, COLORS.DarkAlt)
+	})
+
+	Instance.new("UICorner", bottomPanel).CornerRadius = UDim.new(0, 20)
 
 	uiElements.StatusLabel = Instance.new("TextLabel")
-	uiElements.StatusLabel.Size = UDim2.new(1, -20, 0, 30)
+	uiElements.StatusLabel.Size = UDim2.new(1, -20, 0, 35)
 	uiElements.StatusLabel.Position = UDim2.new(0, 10, 0, 5)
 	uiElements.StatusLabel.BackgroundTransparency = 1
-	uiElements.StatusLabel.TextColor3 = Color3.fromRGB(150, 200, 255)
-	uiElements.StatusLabel.Text = "Status: Idle"
+	uiElements.StatusLabel.TextColor3 = COLORS.TextDim
+	uiElements.StatusLabel.Text = "⚡ Status: Idle"
 	uiElements.StatusLabel.Font = Enum.Font.GothamMedium
-	uiElements.StatusLabel.TextSize = 11
+	uiElements.StatusLabel.TextSize = 12
 	uiElements.StatusLabel.TextXAlignment = Enum.TextXAlignment.Left
 	uiElements.StatusLabel.Parent = bottomPanel
 
 	uiElements.ToggleBtn = Instance.new("TextButton")
-	uiElements.ToggleBtn.Size = UDim2.new(0.9, 0, 0, 40)
-	uiElements.ToggleBtn.Position = UDim2.new(0.05, 0, 0, 40)
-	uiElements.ToggleBtn.BackgroundColor3 = Color3.fromRGB(80, 150, 60)
+	uiElements.ToggleBtn.Size = UDim2.new(0.9, 0, 0, 45)
+	uiElements.ToggleBtn.Position = UDim2.new(0.05, 0, 0, 48)
+	uiElements.ToggleBtn.BackgroundColor3 = COLORS.Success
 	uiElements.ToggleBtn.BackgroundTransparency = 0.3
 	uiElements.ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-	uiElements.ToggleBtn.Text = "START AUTOFARM"
+	uiElements.ToggleBtn.Text = "▶ START AUTOFARM"
 	uiElements.ToggleBtn.Font = Enum.Font.GothamBlack
-	uiElements.ToggleBtn.TextSize = 13
+	uiElements.ToggleBtn.TextSize = 14
 	uiElements.ToggleBtn.Parent = bottomPanel
-	Instance.new("UICorner", uiElements.ToggleBtn).CornerRadius = UDim.new(0, 10)
+	uiElements.ToggleBtn.ZIndex = 10
+
+	Instance.new("UICorner", uiElements.ToggleBtn).CornerRadius = UDim.new(0, 12)
+
+	local toggleStroke = Instance.new("UIStroke", uiElements.ToggleBtn)
+	toggleStroke.Color = COLORS.Success
+	toggleStroke.Transparency = 0.3
+	toggleStroke.Thickness = 2
 
 	-- ======= TARGET SELECTION MENU =======
 	local function createTargetMenu()
@@ -384,71 +678,110 @@ local function createGUI()
 		menuGui.DisplayOrder = 1000
 		menuGui.Parent = targetParent
 
+		local backdrop = Instance.new("Frame")
+		backdrop.Size = UDim2.new(1, 0, 1, 0)
+		backdrop.BackgroundColor3 = COLORS.Dark
+		backdrop.BackgroundTransparency = 0.4
+		backdrop.BorderSizePixel = 0
+		backdrop.Parent = menuGui
+		backdrop.ZIndex = 999
+
 		local menuFrame = Instance.new("Frame")
-		menuFrame.Size = UDim2.new(0, 300, 0, 400)
-		menuFrame.Position = UDim2.new(0.5, -150, 0.5, -200)
-		menuFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+		menuFrame.Size = UDim2.new(0, 350, 0, 450)
+		menuFrame.Position = UDim2.new(0.5, -175, 0.5, -225)
+		menuFrame.BackgroundColor3 = COLORS.DarkAlt
 		menuFrame.BackgroundTransparency = 0.05
 		menuFrame.BorderSizePixel = 0
 		menuFrame.Parent = menuGui
-		Instance.new("UICorner", menuFrame).CornerRadius = UDim.new(0, 12)
+		menuFrame.ZIndex = 1000
+		menuFrame.ClipsDescendants = true
+
+		Instance.new("UICorner", menuFrame).CornerRadius = UDim.new(0, 16)
 
 		local menuStroke = Instance.new("UIStroke", menuFrame)
-		menuStroke.Color = Color3.fromRGB(100, 200, 255)
-		menuStroke.Transparency = 0.3
-		menuStroke.Thickness = 2
+		menuStroke.Color = COLORS.Primary
+		menuStroke.Transparency = 0.2
+		menuStroke.Thickness = 2.5
 
 		local menuTitle = Instance.new("TextLabel")
-		menuTitle.Size = UDim2.new(1, 0, 0, 40)
-		menuTitle.BackgroundColor3 = Color3.fromRGB(15, 15, 25)
+		menuTitle.Size = UDim2.new(1, 0, 0, 50)
+		menuTitle.BackgroundColor3 = COLORS.Dark
 		menuTitle.BackgroundTransparency = 0
-		menuTitle.TextColor3 = Color3.fromRGB(100, 200, 255)
+		menuTitle.TextColor3 = COLORS.Primary
 		menuTitle.Font = Enum.Font.GothamBlack
-		menuTitle.TextSize = 14
-		menuTitle.Text = "SELECT TARGETS"
+		menuTitle.TextSize = 16
+		menuTitle.Text = "🎯 SELECT TARGETS"
 		menuTitle.BorderSizePixel = 0
 		menuTitle.Parent = menuFrame
-		Instance.new("UICorner", menuTitle).CornerRadius = UDim.new(0, 12)
+
+		Instance.new("UICorner", menuTitle).CornerRadius = UDim.new(0, 16)
+
+		local titleGrad = Instance.new("UIGradient", menuTitle)
+		titleGrad.Color = ColorSequence.new({
+			ColorSequenceKeypoint.new(0, COLORS.Primary),
+			ColorSequenceKeypoint.new(1, COLORS.Secondary)
+		})
+		titleGrad.Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 0.9),
+			NumberSequenceKeypoint.new(1, 0.95)
+		})
 
 		local menuScroll = Instance.new("ScrollingFrame")
-		menuScroll.Size = UDim2.new(1, -10, 1, -100)
-		menuScroll.Position = UDim2.new(0, 5, 0, 45)
+		menuScroll.Size = UDim2.new(1, -20, 1, -130)
+		menuScroll.Position = UDim2.new(0, 10, 0, 55)
 		menuScroll.BackgroundTransparency = 1
 		menuScroll.BorderSizePixel = 0
-		menuScroll.ScrollBarThickness = 3
-		menuScroll.ScrollBarImageColor3 = Color3.fromRGB(100, 200, 255)
+		menuScroll.ScrollBarThickness = 4
+		menuScroll.ScrollBarImageColor3 = COLORS.Primary
 		menuScroll.Parent = menuFrame
 
 		local menuLayout = Instance.new("UIListLayout")
 		menuLayout.SortOrder = Enum.SortOrder.LayoutOrder
-		menuLayout.Padding = UDim.new(0, 5)
+		menuLayout.Padding = UDim.new(0, 8)
 		menuLayout.Parent = menuScroll
 
 		local menuPadding = Instance.new("UIPadding", menuScroll)
-		menuPadding.PaddingLeft = UDim.new(0, 5)
-		menuPadding.PaddingRight = UDim.new(0, 5)
+		menuPadding.PaddingLeft = UDim.new(0, 8)
+		menuPadding.PaddingRight = UDim.new(0, 8)
+		menuPadding.PaddingTop = UDim.new(0, 8)
 
 		menuLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-			menuScroll.CanvasSize = UDim2.new(0, 0, 0, menuLayout.AbsoluteContentSize.Y)
+			menuScroll.CanvasSize = UDim2.new(0, 0, 0, menuLayout.AbsoluteContentSize.Y + 16)
 		end)
 
-		-- Create checkboxes for each NPC
 		for _, npcName in ipairs(availableNPCs) do
+			local isSelected = table.find(CONFIG.TargetNPCs, npcName)
+			
+			local checkboxContainer = Instance.new("Frame")
+			checkboxContainer.Size = UDim2.new(1, 0, 0, 38)
+			checkboxContainer.BackgroundTransparency = 1
+			checkboxContainer.Parent = menuScroll
+
 			local checkboxBtn = Instance.new("TextButton")
-			checkboxBtn.Size = UDim2.new(1, -10, 0, 35)
-			checkboxBtn.BackgroundColor3 = table.find(CONFIG.TargetNPCs, npcName) and Color3.fromRGB(80, 200, 100) or Color3.fromRGB(50, 50, 70)
-			checkboxBtn.BackgroundTransparency = 0.4
-			checkboxBtn.TextColor3 = Color3.fromRGB(200, 220, 255)
+			checkboxBtn.Size = UDim2.new(1, -10, 1, 0)
+			checkboxBtn.BackgroundColor3 = isSelected and COLORS.Success or COLORS.Secondary
+			checkboxBtn.BackgroundTransparency = 0.5
+			checkboxBtn.TextColor3 = COLORS.Text
 			checkboxBtn.Font = Enum.Font.GothamSemibold
 			checkboxBtn.TextSize = 12
-			checkboxBtn.Text = (table.find(CONFIG.TargetNPCs, npcName) and "✓ " or "  ") .. npcName
-			checkboxBtn.Parent = menuScroll
-			Instance.new("UICorner", checkboxBtn).CornerRadius = UDim.new(0, 6)
+			checkboxBtn.Text = (isSelected and "✓ " or "  ") .. npcName
+			checkboxBtn.Parent = checkboxContainer
+			checkboxBtn.ZIndex = 10
+
+			Instance.new("UICorner", checkboxBtn).CornerRadius = UDim.new(0, 10)
 
 			local cbStroke = Instance.new("UIStroke", checkboxBtn)
-			cbStroke.Color = Color3.fromRGB(100, 200, 255)
-			cbStroke.Transparency = 0.6
-			cbStroke.Thickness = 1
+			cbStroke.Color = isSelected and COLORS.Success or COLORS.Secondary
+			cbStroke.Transparency = 0.4
+			cbStroke.Thickness = 1.5
+
+			checkboxBtn.MouseEnter:Connect(function()
+				smoothTween(checkboxBtn, 0.2, {BackgroundTransparency = 0.3})
+			end)
+
+			checkboxBtn.MouseLeave:Connect(function()
+				smoothTween(checkboxBtn, 0.2, {BackgroundTransparency = 0.5})
+			end)
 
 			checkboxBtn.MouseButton1Click:Connect(function()
 				local idx = table.find(CONFIG.TargetNPCs, npcName)
@@ -458,55 +791,77 @@ local function createGUI()
 					table.insert(CONFIG.TargetNPCs, npcName)
 				end
 
-				local isSelected = table.find(CONFIG.TargetNPCs, npcName)
-				TweenService:Create(checkboxBtn, TweenInfo.new(0.15), {
-					BackgroundColor3 = isSelected and Color3.fromRGB(80, 200, 100) or Color3.fromRGB(50, 50, 70),
-					BackgroundTransparency = 0.4
-				}):Play()
-				checkboxBtn.Text = (isSelected and "✓ " or "  ") .. npcName
+				local newIsSelected = table.find(CONFIG.TargetNPCs, npcName)
+				smoothTween(checkboxBtn, 0.15, {
+					BackgroundColor3 = newIsSelected and COLORS.Success or COLORS.Secondary,
+				})
+				smoothTween(cbStroke, 0.15, {
+					Color = newIsSelected and COLORS.Success or COLORS.Secondary,
+				})
+				checkboxBtn.Text = (newIsSelected and "✓ " or "  ") .. npcName
 				uiElements.UpdateTargetLabel()
 			end)
 		end
 
-		-- Buttons
 		local buttonContainer = Instance.new("Frame")
-		buttonContainer.Size = UDim2.new(1, 0, 0, 50)
-		buttonContainer.Position = UDim2.new(0, 0, 1, -50)
-		buttonContainer.BackgroundTransparency = 1
+		buttonContainer.Size = UDim2.new(1, 0, 0, 65)
+		buttonContainer.Position = UDim2.new(0, 0, 1, -65)
+		buttonContainer.BackgroundColor3 = COLORS.Dark
+		buttonContainer.BackgroundTransparency = 0.5
 		buttonContainer.BorderSizePixel = 0
 		buttonContainer.Parent = menuFrame
 
+		Instance.new("UICorner", buttonContainer).CornerRadius = UDim.new(0, 16)
+
 		local confirmBtn = Instance.new("TextButton")
-		confirmBtn.Size = UDim2.new(0.5, -3, 1, 0)
-		confirmBtn.BackgroundColor3 = Color3.fromRGB(80, 200, 100)
+		confirmBtn.Size = UDim2.new(0.5, -4, 0, 45)
+		confirmBtn.Position = UDim2.new(0, 8, 0.5, -22.5)
+		confirmBtn.BackgroundColor3 = COLORS.Success
 		confirmBtn.BackgroundTransparency = 0.3
 		confirmBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 		confirmBtn.Font = Enum.Font.GothamBlack
-		confirmBtn.TextSize = 12
-		confirmBtn.Text = "CONFIRM"
+		confirmBtn.TextSize = 13
+		confirmBtn.Text = "✓ CONFIRM"
 		confirmBtn.BorderSizePixel = 0
 		confirmBtn.Parent = buttonContainer
-		Instance.new("UICorner", confirmBtn).CornerRadius = UDim.new(0, 8)
+		confirmBtn.ZIndex = 11
+
+		Instance.new("UICorner", confirmBtn).CornerRadius = UDim.new(0, 10)
+
+		local confStroke = Instance.new("UIStroke", confirmBtn)
+		confStroke.Color = COLORS.Success
+		confStroke.Thickness = 1.5
 
 		local cancelBtn = Instance.new("TextButton")
-		cancelBtn.Size = UDim2.new(0.5, -3, 1, 0)
-		cancelBtn.Position = UDim2.new(0.5, 3, 0, 0)
-		cancelBtn.BackgroundColor3 = Color3.fromRGB(200, 80, 80)
+		cancelBtn.Size = UDim2.new(0.5, -4, 0, 45)
+		cancelBtn.Position = UDim2.new(0.5, 4, 0.5, -22.5)
+		cancelBtn.BackgroundColor3 = COLORS.Danger
 		cancelBtn.BackgroundTransparency = 0.3
 		cancelBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 		cancelBtn.Font = Enum.Font.GothamBlack
-		cancelBtn.TextSize = 12
-		cancelBtn.Text = "CANCEL"
+		cancelBtn.TextSize = 13
+		cancelBtn.Text = "✕ CANCEL"
 		cancelBtn.BorderSizePixel = 0
 		cancelBtn.Parent = buttonContainer
-		Instance.new("UICorner", cancelBtn).CornerRadius = UDim.new(0, 8)
+		cancelBtn.ZIndex = 11
+
+		Instance.new("UICorner", cancelBtn).CornerRadius = UDim.new(0, 10)
+
+		local cancelStroke = Instance.new("UIStroke", cancelBtn)
+		cancelStroke.Color = COLORS.Danger
+		cancelStroke.Thickness = 1.5
 
 		confirmBtn.MouseButton1Click:Connect(function()
+			smoothTween(menuFrame, 0.3, {Position = UDim2.new(0.5, -175, 0.5, -500)})
+			task.wait(0.3)
 			menuGui:Destroy()
 		end)
 
 		cancelBtn.MouseButton1Click:Connect(function()
+			CONFIG.TargetNPCs = {}
 			scanNPCNames()
+			smoothTween(menuFrame, 0.3, {Position = UDim2.new(0.5, -175, 0.5, -500)})
+			task.wait(0.3)
 			menuGui:Destroy()
 		end)
 	end
@@ -527,7 +882,7 @@ local function createGUI()
 		if input.UserInputType == Enum.UserInputType.MouseButton1 then
 			isDragging = true
 			dragStart = input.Position
-			startPos = frame.Position
+			startPos = mainFrame.Position
 			dragInput = input
 		end
 	end)
@@ -535,7 +890,7 @@ local function createGUI()
 	titleBar.InputChanged:Connect(function(input)
 		if input == dragInput and isDragging then
 			local delta = input.Position - dragStart
-			frame.Position = startPos + UDim2.new(0, delta.X, 0, delta.Y)
+			mainFrame.Position = startPos + UDim2.new(0, delta.X, 0, delta.Y)
 		end
 	end)
 
@@ -545,20 +900,28 @@ local function createGUI()
 		end
 	end)
 
-	-- ======= HIDE/CLOSE BUTTONS =======
-	hideBtn.MouseButton1Click:Connect(function()
-		local isVisible = frame.Visible
-		frame.Visible = not isVisible
-		TweenService:Create(hideBtn, TweenInfo.new(0.2), {
-			BackgroundColor3 = isVisible and Color3.fromRGB(100, 150, 200) or Color3.fromRGB(80, 200, 100)
-		}):Play()
+	-- ======= BUTTON EVENTS =======
+	minimizeBtn.MouseButton1Click:Connect(function()
+		uiVisible = not uiVisible
+		smoothTween(mainFrame, 0.3, {Size = uiVisible and UDim2.new(0, 350, 0, 550) or UDim2.new(0, 350, 0, 65)})
+		smoothTween(minimizeBtn, 0.2, {BackgroundTransparency = uiVisible and 0.5 or 0.7})
 	end)
 
 	closeBtn.MouseButton1Click:Connect(function()
+		smoothTween(mainFrame, 0.3, {Position = UDim2.new(0, 30, 0.5, -600)})
+		task.wait(0.3)
 		uiElements.Cleanup()
 	end)
 
-	return screenGui, frame
+	-- ======= LOADING ANIMATION =======
+	task.wait(1)
+	smoothTween(loadingScreen, 0.6, {BackgroundTransparency = 1})
+	task.wait(0.6)
+	loadingScreen:Destroy()
+
+	smoothTween(mainFrame, 0.8, {Position = UDim2.new(0, 30, 0.5, -275)})
+
+	return screenGui, mainFrame
 end
 
 local screenGui, mainFrame = createGUI()
@@ -568,7 +931,6 @@ function uiElements.Cleanup()
 	scriptRunning = false
 	CONFIG.AutofarmActive = false
 
-	-- Disconnect all custom connections
 	for _, connection in ipairs(allConnections) do
 		if connection and connection.Connected then
 			connection:Disconnect()
@@ -576,7 +938,6 @@ function uiElements.Cleanup()
 	end
 	allConnections = {}
 
-	-- Stop character movement
 	local char = player.Character
 	if char then
 		local hum = char:FindFirstChildOfClass("Humanoid")
@@ -585,7 +946,6 @@ function uiElements.Cleanup()
 		end
 	end
 
-	-- Destroy UI
 	if screenGui and screenGui.Parent then
 		screenGui:Destroy()
 	end
@@ -595,7 +955,7 @@ function uiElements.Cleanup()
 		targetMenu:Destroy()
 	end
 
-	print("Autofarm script cleaned up and disabled!")
+	print("✓ Autofarm script cleaned up!")
 end
 
 -- ======= DATA RECOVERY UTILITIES =======
@@ -624,7 +984,6 @@ local function resetAbilityCooldownTracking()
 	abilityCooldownMemory = {}
 	fightStartedAt = os.clock()
 end
-
 
 local function setAutofarmPausedForHealth(isPaused)
 	autofarmPausedForHealth = isPaused
@@ -673,7 +1032,6 @@ useHealthRefillInternal = function(ignoreEnabledCheck)
 		setAutofarmPausedForHealth(true)
 	end
 
-	-- Teleportálás a gyógyulási pontra
 	local success, result = pcall(function()
 		if humanoid.Sit then
 			humanoid.Sit = false
@@ -699,9 +1057,8 @@ useHealthRefillInternal = function(ignoreEnabledCheck)
 		return false, "Health: Failed"
 	end
 
-	updateStatus("Teleported to health spawn")
+	updateStatus("💊 Healing at spawn...")
 
-	-- Várakozás a gyógyulásra, majd visszatérés
 	task.delay(math.max(CONFIG.HealDuration, 0), function()
 		if currentTaskId ~= returnTaskId then
 			healthActionBusy = false
@@ -724,7 +1081,7 @@ useHealthRefillInternal = function(ignoreEnabledCheck)
 			if returnDistance > 12 then
 				returnHrp.CFrame = savedReturnCFrame
 			end
-			updateStatus("Returned to saved position")
+			updateStatus("✓ Returned to combat")
 		end
 
 		healthActionBusy = false
@@ -741,7 +1098,7 @@ end
 local function onFightStarted()
 	saveCurrentPosition()
 	resetAbilityCooldownTracking()
-	updateStatus("Fight started")
+	updateStatus("⚔ Fight started!")
 end
 
 local function onFightEnded()
@@ -752,14 +1109,14 @@ local function onFightEnded()
 		local lowHealth = getHealthRatio() <= CONFIG.AutoHealthThreshold
 		local lowChakra = getChakraRatio() <= CONFIG.AutoChakraThreshold
 		if lowHealth or lowChakra then
-			updateStatus("Low HP/Chakra after combat, heading to spawn...")
+			updateStatus("📍 Heading to spawn...")
 			useHealthRefillInternal(false)
 			return
 		end
 	end
 
 	if CONFIG.ReturnDelay > 0 then
-		updateStatus("Returning in " .. tostring(CONFIG.ReturnDelay) .. "s")
+		updateStatus("⏳ Returning in " .. tostring(CONFIG.ReturnDelay) .. "s")
 		task.delay(CONFIG.ReturnDelay, function()
 			if currentTaskId ~= returnTaskId then return end
 			if scriptRunning and not isInCombat() and not healthActionBusy then
@@ -850,7 +1207,6 @@ local function processTurnActions()
 	end
 end
 
--- Turn Event Hook
 if turnEvent then
 	local conn = turnEvent.OnClientEvent:Connect(function(message, scope)
 		if not CONFIG.AutofarmActive or not scriptRunning then return end
@@ -911,10 +1267,10 @@ local function travelToNPC(npc)
 
 		if useWalk then
 			humanoid:MoveTo(npcHrp.Position)
-			updateStatus("Walking to " .. npc.Name .. " (" .. math.floor(distance) .. " studs)")
+			updateStatus("🚶 Walking to " .. npc.Name)
 		else
 			hrp.CFrame = npcHrp.CFrame
-			updateStatus("Hunting: " .. npc.Name)
+			updateStatus("🎯 Hunting: " .. npc.Name)
 		end
 	end
 end
@@ -933,11 +1289,10 @@ local function mainControlLoop()
 		lastCombatState = nowInCombat
 
 		if healthActionBusy or autofarmPausedForHealth then
-			updateStatus("Using health spot...")
+			updateStatus("🏥 Using health spot...")
 			continue
 		end
 
-		-- Gyógyulás engedélyezése harc közben, ha a HealDuringCombat aktív
 		local canHeal = not nowInCombat or CONFIG.HealDuringCombat
 		if canHeal and CONFIG.HealthEnabled then
 			local lowHealth = getHealthRatio() <= CONFIG.AutoHealthThreshold
@@ -951,7 +1306,7 @@ local function mainControlLoop()
 		end
 
 		if isDead() then
-			updateStatus("Recovering...")
+			updateStatus("💀 Recovering...")
 			task.wait(2)
 			continue
 		end
@@ -961,17 +1316,17 @@ local function mainControlLoop()
 				processTurnActions()
 				task.wait(CONFIG.ActionCooldown)
 			else
-				updateStatus("Waiting on Enemy...")
+				updateStatus("⏳ Waiting on Enemy...")
 			end
 		else
 			if #CONFIG.TargetNPCs == 0 then
-				updateStatus("Select targets to start farming")
+				updateStatus("📍 Select targets first!")
 			else
 				local targetNPC = findOptimalNPC()
 				if targetNPC then
 					travelToNPC(targetNPC)
 				else
-					updateStatus("Searching for targets...")
+					updateStatus("🔍 Searching for targets...")
 				end
 			end
 		end
@@ -981,25 +1336,28 @@ end
 -- ======= INITIALIZATION =======
 uiElements.ToggleBtn.MouseButton1Click:Connect(function()
 	if #CONFIG.TargetNPCs == 0 and not CONFIG.AutofarmActive then
-		updateStatus("Please select targets first!")
+		updateStatus("⚠ Please select targets first!")
 		return
 	end
 
 	CONFIG.AutofarmActive = not CONFIG.AutofarmActive
 	if CONFIG.AutofarmActive then
-		uiElements.ToggleBtn.Text = "STOP AUTOFARM"
-		TweenService:Create(uiElements.ToggleBtn, TweenInfo.new(0.25), {BackgroundColor3 = Color3.fromRGB(255, 80, 80)}):Play()
+		uiElements.ToggleBtn.Text = "⏹ STOP AUTOFARM"
+		smoothTween(uiElements.ToggleBtn, 0.25, {BackgroundColor3 = COLORS.Danger})
+		smoothTween(uiElements.ToggleBtn:FindFirstChildOfClass("UIStroke"), 0.25, {Color = COLORS.Danger})
 		scanNPCNames()
 		lastCombatState = isInCombat()
 		if not lastCombatState then
 			saveCurrentPosition()
 			resetAbilityCooldownTracking()
 		end
+		updateStatus("✓ Autofarm running!")
 		task.spawn(mainControlLoop)
 	else
-		uiElements.ToggleBtn.Text = "START AUTOFARM"
-		TweenService:Create(uiElements.ToggleBtn, TweenInfo.new(0.25), {BackgroundColor3 = Color3.fromRGB(80, 150, 60)}):Play()
-		updateStatus("Idle")
+		uiElements.ToggleBtn.Text = "▶ START AUTOFARM"
+		smoothTween(uiElements.ToggleBtn, 0.25, {BackgroundColor3 = COLORS.Success})
+		smoothTween(uiElements.ToggleBtn:FindFirstChildOfClass("UIStroke"), 0.25, {Color = COLORS.Success})
+		updateStatus("⏹ Autofarm stopped")
 
 		local char = player.Character
 		local hum = char and char:FindFirstChildOfClass("Humanoid")
